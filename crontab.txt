@@ -1,0 +1,22 @@
+# WorkBuddy 自动签到 —— crontab 配置
+#
+# 签到：5 9,10,11 * * *   每天 3 次触发，实际执行 1 次（daily_jitter.sh 内掷骰子选点）
+# 巡检：5 12,16,20 * * *  每天 3 次，固定时刻（巡检幂等，固定时刻便于日志定位）
+#
+# 显式用 /bin/bash：daily_jitter.sh 依赖 $RANDOM 与位置参数行为，
+# 而 /bin/sh 在本机指向 dash（$RANDOM 为空）。
+# 显式用绝对路径：cron 的 PATH 不含 nvm，node 不可见；python3 用 /usr/bin/python3。
+#
+# 安装： crontab /root/work/workbuddy-auto-sign/crontab.txt
+# 查看： crontab -l
+# 卸载： crontab -r  （会删除全部条目，注意确认）
+
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+MAILTO=""
+
+# ---- 每日签到（抖动，9/10/11 点中随机一小时）----
+5 9,10,11 * * * /bin/bash /root/work/workbuddy-auto-sign/daily_jitter.sh >> /root/.workbuddy/cron.log 2>&1
+
+# ---- 成长中心巡检 + 签到兜底（固定 12/16/20 点）----
+5 12,16,20 * * * WORKBUDDY_AUTH_FILE=/root/.workbuddy/auth/workbuddy-desktop.info /usr/bin/python3 /root/work/workbuddy-auto-sign/notify_feishu.py poll >> /root/.workbuddy/cron.log 2>&1
