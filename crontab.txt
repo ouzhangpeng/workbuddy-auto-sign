@@ -15,8 +15,13 @@ SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 MAILTO=""
 
+# Linux 无 WorkBuddy 桌面端：凭据来自 CodeBuddy CLI 写出的明文文件
+# （桌面端导出的 workbuddy-desktop.info 为加密信封，服务器无客户端无法解密）
+# 注意：该明文令牌约 30 天过期且脚本不自动续期，过期前需重新 codebuddy 登录
+WORKBUDDY_AUTH_FILE=/root/.local/share/CodeBuddyExtension/Data/Public/auth/Tencent-Cloud.coding-copilot.info
+
 # ---- 每日签到（抖动，9/10/11 点中随机一小时）----
 5 9,10,11 * * * /bin/bash /root/work/workbuddy-auto-sign/daily_jitter.sh >> /root/.workbuddy/cron.log 2>&1
 
 # ---- 成长中心巡检 + 签到兜底（固定 12/16/20 点）----
-5 12,16,20 * * * WORKBUDDY_AUTH_FILE=/root/.workbuddy/auth/workbuddy-desktop.info /usr/bin/python3 /root/work/workbuddy-auto-sign/notify_feishu.py poll >> /root/.workbuddy/cron.log 2>&1
+5 12,16,20 * * * /usr/bin/python3 /root/work/workbuddy-auto-sign/notify_feishu.py poll >> /root/.workbuddy/cron.log 2>&1
