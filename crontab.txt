@@ -1,9 +1,12 @@
-# WorkBuddy 自动签到 —— crontab 配置
+# WorkBuddy 自动签到 —— crontab 配置（多账号）
 #
-# 签到：5 9,10,11 * * *   每天 3 次触发，实际执行 1 次（daily_jitter.sh 内掷骰子选点）
+# 签到：5 9,10,11 * * *   每天 3 次触发，**每个账号**实际执行 1 次
+#                          （daily_jitter.sh 内为每个账号独立掷骰子选点）
 # 巡检：5 12,16,20 * * *  每天 3 次，固定时刻（巡检幂等，固定时刻便于日志定位）
 #
-# 显式用 /bin/bash：daily_jitter.sh 依赖 $RANDOM 与位置参数行为，
+# 两者都自动遍历 ~/.workbuddy/accounts/*.info，**加账号只需放文件，不用改 crontab**。
+#
+# 显式用 /bin/bash：daily_jitter.sh 依赖 $RANDOM 与 bash 语法，
 # 而 /bin/sh 在本机指向 dash（$RANDOM 为空）。
 # 显式用绝对路径：cron 的 PATH 不含 nvm，node 不可见；python3 用 /usr/bin/python3。
 #
@@ -15,13 +18,15 @@ SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 MAILTO=""
 
+# 注意：这里刻意**不设** WORKBUDDY_AUTH_FILE。
+# 多账号下每个账号的凭据由 notify_feishu.py 按 accounts/<名字>.info 单独注入；
+# 若在此设置全局值，会把所有账号都指向同一个文件。
 # Linux 无 WorkBuddy 桌面端：凭据来自 CodeBuddy CLI 写出的明文文件
-# （桌面端导出的 workbuddy-desktop.info 为加密信封，服务器无客户端无法解密）
-# 注意：该明文令牌约 30 天过期且脚本不自动续期，过期前需重新 codebuddy 登录
-WORKBUDDY_AUTH_FILE=/root/.local/share/CodeBuddyExtension/Data/Public/auth/Tencent-Cloud.coding-copilot.info
+# （桌面端导出的 workbuddy-desktop.info 为加密信封，服务器无客户端无法解密）。
+# 明文令牌约 30 天过期且脚本不自动续期，过期前需按账号逐个重新登录并拷出。
 
-# ---- 每日签到（抖动，9/10/11 点中随机一小时）----
+# ---- 每日签到（每账号独立抖动，9/10/11 点中各自随机一小时）----
 5 9,10,11 * * * /bin/bash /root/work/workbuddy-auto-sign/daily_jitter.sh >> /root/.workbuddy/cron.log 2>&1
 
-# ---- 成长中心巡检 + 签到兜底（固定 12/16/20 点）----
+# ---- 成长中心巡检 + 签到兜底（固定 12/16/20 点，遍历全部账号）----
 5 12,16,20 * * * /usr/bin/python3 /root/work/workbuddy-auto-sign/notify_feishu.py poll >> /root/.workbuddy/cron.log 2>&1

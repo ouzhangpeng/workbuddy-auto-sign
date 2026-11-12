@@ -24,14 +24,86 @@
 ```
   crontab
     |
-    +-- 5 9,10,11 * * *   daily_jitter.sh    每日签到，实际执行 1 次
-    |     |                 (首次触发掷骰子选 9/10/11 点中之一)
-    |     +-- notify_feishu.py token-check   凭据过期告警
-    |     +-- notify_feishu.py daily  --> vendor/signin.py auto --> 飞书
+    +-- 5 9,10,11 * * *   daily_jitter.sh           遍历 accounts/*.info
+    |     |                 (每个账号独立掷骰子选 9/10/11 点中之一)
+    |     +-- notify_feishu.py token-check --account <名字>   凭据过期告警
+    |     +-- notify_feishu.py daily --account <名字> --> signin.py auto --> 飞书
     |
-    +-- 5 12,16,20 * * *  notify_feishu.py poll --> vendor/signin.py silent-poll --> 飞书
+    +-- 5 12,16,20 * * *  notify_feishu.py poll     遍历 accounts/*.info
           (固定时刻；兼作签到兜底：每轮先查状态，未签则补)
 ```
+
+账号数由 `~/.workbuddy/accounts/*.info` 决定，**加账号只需放文件，不用改 crontab**。
+每个账号单独推送一条消息，首行标注 `【账号名】`。
+
+## 多账号
+
+### 目录结构
+
+```
+~/.workbuddy/
+  feishu.conf                全局 webhook 与签名密钥（600）
+  run.log                    全局日志（每行带 [账号名] 前缀）
+  accounts/
+    账号1.info               凭据（600），**文件名即飞书消息里的显示名**
+    账号1/                   该账号的独立状态目录
+      daily-ran-today        当日是否已签到
+      jitter-seed            今日选定的签到小时
+      jitter-seed.date       抖动 seed 的日期
+      token-warned-for       已告警过的到期时间
+      signin-result.log      上游 silent 模式写出的 JSON
+    账号2.info
+    账号2/
+```
+
+状态必须按账号隔离：若共用 `daily-ran-today`，账号1 跑完后账号2 当天永远不跑；
+若共用 `signin-result.log`，巡检按偏移量读新增行时会解析到别的账号的输出。
+
+### 为什么需要「逐个登录再拷出」
+
+CodeBuddy CLI 在一台机器上只有**一个固定凭据路径**
+（Linux 为 `~/.local/share/CodeBuddyExtension/Data/Public/auth/Tencent-Cloud.coding-copilot.info`），
+登录第二个账号会**覆盖**第一个。所以收割流程是：
+
+```bash
+# 账号1：登录后拷出
+codebuddy                      # 以账号1登录（首次交互登录）
+mkdir -p ~/.workbuddy/accounts
+cp ~/.local/share/CodeBuddyExtension/Data/Public/auth/Tencent-Cloud.coding-copilot.info \
+   ~/.workbuddy/accounts/账号1.info
+chmod 600 ~/.workbuddy/accounts/账号1.info
+
+# 账号2：退出后换账号登录，再拷出
+# （退出/切换方式随 CLI 版本而异，通常是清掉上面的凭据文件后重启 codebuddy 重新登录）
+codebuddy
+cp ~/.local/share/CodeBuddyExtension/Data/Public/auth/Tencent-Cloud.coding-copilot.info \
+   ~/.workbuddy/accounts/账号2.info
+chmod 600 ~/.workbuddy/accounts/账号2.info
+```
+
+拷出来的 `.info` 彼此独立，可长期共存。上游 `signin.py` **只读**凭据、不刷新
+token、不回写文件，所以不依赖 CLI 会话仍然有效。
+
+> 每个账号的 accessToken 仍约 30 天过期，收割流程需按账号重复。
+
+### 加号 / 删号 / 改名
+
+```bash
+# 加号：放文件即可，下一轮 cron 自动纳入
+cp <新账号.info> ~/.workbuddy/accounts/账号3.info && chmod 600 ~/.workbuddy/accounts/账号3.info
+
+# 改名：移动凭据与状态目录（显示名随之改变）
+mv ~/.workbuddy/accounts/账号3.info ~/.workbuddy/accounts/工作号.info
+mv ~/.workbuddy/accounts/账号3       ~/.workbuddy/accounts/工作号
+
+# 删号：两者一起删，避免残留状态
+rm ~/.workbuddy/accounts/账号3.info && rm -rf ~/.workbuddy/accounts/账号3
+
+# 确认当前识别到哪些账号
+python3 notify_feishu.py accounts
+```
+
+账号名不要含空格（消息与日志里用作标识）。
 
 ## 文件位置
 
@@ -43,26 +115,31 @@
 | `crontab.txt` | crontab 配置模板（本仓库） | 是 |
 | `vendor/signin.py` | 上游领取逻辑 | 是（vendored） |
 | `vendor/UPSTREAM_COMMIT` | 上游版本锚点 | 是 |
-| `~/.workbuddy/auth/workbuddy-desktop.info` | 登录凭据 | **否** |
+| `~/.workbuddy/accounts/<名字>.info` | 各账号登录凭据 | **否** |
+| `~/.workbuddy/accounts/<名字>/` | 各账号状态 | **否** |
 | `~/.workbuddy/feishu.conf` | webhook 与签名密钥 | **否** |
 | `~/.workbuddy/run.log` | 运行日志 | 否 |
 
 ## 部署
 
-### 1. 放置凭据
+### 1. 放置凭据（每个账号一份）
 
 在已登录 WorkBuddy 的电脑上取登录态文件：
 
 - macOS：`~/Library/Application Support/CodeBuddyExtension/Data/Public/auth/workbuddy-desktop.info`
 - Windows：`%LOCALAPPDATA%\CodeBuddyExtension\Data\Public\auth\workbuddy-desktop.info`
+- Linux：`~/.local/share/CodeBuddyExtension/Data/Public/auth/Tencent-Cloud.coding-copilot.info`
 
-传到服务器：
+传到服务器，**文件名即账号显示名**：
 
 ```bash
-mkdir -p ~/.workbuddy/auth && chmod 700 ~/.workbuddy ~/.workbuddy/auth
-scp workbuddy-desktop.info root@<服务器>:/root/.workbuddy/auth/
-chmod 600 /root/.workbuddy/auth/workbuddy-desktop.info
+mkdir -p ~/.workbuddy/accounts && chmod 700 ~/.workbuddy ~/.workbuddy/accounts
+scp workbuddy-desktop.info root@<服务器>:/root/.workbuddy/accounts/账号1.info
+chmod 600 /root/.workbuddy/accounts/账号1.info
 ```
+
+多个账号见上一节「多账号」。
+
 
 ### 2. 配置飞书
 
@@ -87,30 +164,32 @@ crontab -l        # 确认两行任务
 ### 4. 手动验证
 
 ```bash
-export WORKBUDDY_AUTH_FILE=/root/.workbuddy/auth/workbuddy-desktop.info
-python3 vendor/signin.py doctor    # 期望 AUTH_READY / credential_format: plaintext
-python3 vendor/signin.py status    # 期望 HTTP 200
-python3 notify_feishu.py daily     # 应在飞书收到消息
+python3 notify_feishu.py accounts        # 应列出识别到的账号名
+WORKBUDDY_AUTH_FILE=/root/.workbuddy/accounts/账号1.info \
+  python3 vendor/signin.py doctor        # 期望 AUTH_READY / credential_format: plaintext
+python3 notify_feishu.py daily --account 账号1   # 应在飞书收到以【账号1】开头的消息
+python3 notify_feishu.py poll            # 遍历全部账号；仅在有入账或出错时推送
 ```
 
 ## 凭据过期怎么办
 
-凭据约 30 天过期。临近过期（默认 14 天内）飞书会自动收到告警，**无需盯时间**。
+每个账号的凭据约 30 天过期。临近过期（默认 14 天内）飞书会自动收到告警，
+**每个账号独立告警、消息带【账号名】**，无需盯时间。
 
-告警文案里带完整重传步骤。手动处理：
+告警文案里带完整重传步骤。手动处理（以「账号1」为例）：
 
 ```bash
-# 1. 按上面「部署」第 1 步重新取文件并 scp 上来
-scp workbuddy-desktop.info root@<服务器>:/root/.workbuddy/auth/
-chmod 600 /root/.workbuddy/auth/workbuddy-desktop.info
+# 1. 按上面「部署」第 1 步重新取文件并 scp 上来，覆盖同名文件
+scp workbuddy-desktop.info root@<服务器>:/root/.workbuddy/accounts/账号1.info
+chmod 600 /root/.workbuddy/accounts/账号1.info
 
 # 2. 自检
-WORKBUDDY_AUTH_FILE=/root/.workbuddy/auth/workbuddy-desktop.info \
+WORKBUDDY_AUTH_FILE=/root/.workbuddy/accounts/账号1.info \
   python3 vendor/signin.py doctor
 ```
 
-看到 `credential_format: plaintext` 即成功，告警阈值会按新凭据的 `expiresAt` 自动重算，
-**不需要改任何配置**。
+看到 `credential_format: plaintext` 即成功，告警阈值会按新凭据的 `expiresAt`
+自动重算，**不需要改任何配置**。多个账号逐个重复即可。
 
 ### 如果 doctor 显示 sym-v1
 
@@ -134,8 +213,16 @@ WORKBUDDY_AUTH_FILE=/root/.workbuddy/auth/workbuddy-desktop.info \
 | `⚠️ 需要你处理` + 网络不可达 | 断网 | 等下次自动重试，持续失败再查 |
 | `🟡/🔴 凭据即将过期` | 提前告警 | 按上一节重传 |
 
-推送粒度：**签到任务每次都推**；**巡检只在真领到积分或出错时推**，
+推送粒度：**签到任务每账号每次都推**；**巡检只在某账号真领到积分或出错时推**，
 「已签过 / 在路上 / 今日名额已用完」这类空跑不会打扰你。
+
+多账号时每条消息首行带 `【账号名】`，例如：
+
+```
+【账号1】每日签到
+[签到] CLAIMED（+8 积分），连续 3 天
+[猫猫旅行] 领取任务奖励 +credit300
+```
 
 ## 上游同步
 
